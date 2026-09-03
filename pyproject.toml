@@ -10,6 +10,25 @@ requires-python = ">=3.14"
 dependencies = [
     "aiohttp>=3.14.3",
     "attrs>=26.1.0",
+    "beautifulsoup4>=4.15.0",
+    "camelot-py>=2.0.0",
     "ics>=0.7.3",
+    "lxml>=6.1.2",
+    "matplotlib>=3.11.1",
+    "pandas[excel]>=3.0.5",
+    "pdfminer-six>=20260107",
+    "pydantic>=2.13.5",
+    "pytz>=2026.3.post1",
+    "structlog>=26.1.0",
     "uvloop>=0.22.1",
+    "yarl>=1.24.5",
+]
+
+[tool.ruff.lint]
+ignore = ["E402"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+    "ruff>=0.16.5",
 ]
