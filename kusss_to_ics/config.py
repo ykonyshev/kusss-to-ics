@@ -7,13 +7,22 @@ import structlog
 from pydantic import BaseModel
 from structlog import BoundLogger
 
-from kusss_to_ics.models.program import Program
-
 logger: BoundLogger = structlog.get_logger()
 
 
+class InvalidConfigError(Exception):
+    """Error to indicate inconsistencies in the configuration file."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
+class ConfigProgram(BaseModel):
+    curriculum_pdf: Path
+
+
 class Config(BaseModel):
-    programs: list[Program]
+    programs: list[ConfigProgram]
 
     @classmethod
     def from_file(cls, path: Path) -> Config:
@@ -27,4 +36,3 @@ class Config(BaseModel):
         log.info("Validated and loaded config.")
 
         return config
-

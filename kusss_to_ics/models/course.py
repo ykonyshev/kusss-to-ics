@@ -4,7 +4,7 @@ from datetime import date, time
 from enum import Enum, auto
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, PlainSerializer, RootModel
+from pydantic import BaseModel, PlainSerializer
 from yarl import URL
 
 type CourseType = Literal["VL", "VO", "UE", "KO", "KV", "AG", "IK", "PR", "PS", "KS", "VU", "SE"]
@@ -65,6 +65,4 @@ class Course(BaseModel):
 type Classes = list[Class]
 type Instructors = list[Instructor]
 type Appointments = list[Appointment]
-
-
-Courses = RootModel[list[Course]]
+type Courses = list[Course]

@@ -27,7 +27,7 @@ from kusss_to_ics.models.course import (
     Instructor,
     Mode,
 )
-from kusss_to_ics.models.program import Program
+from kusss_to_ics.models.program import Program, ProgramDescription
 from kusss_to_ics.task_group_utils import async_map_collect
 
 logger: BoundLogger = get_logger()
@@ -83,15 +83,14 @@ COURSE_CLASS_GROUP_PAGE: Final = "coursecatalogue-get-courseclasses.action"
 COURSE_CLASSES_PAGE: Final = "lvaregistrationlist.action"
 COURSE_CLASS_PAGE: Final = "lvaregistrationlist.action"
 
-DEFAULT_SESSION_COOKIES: Final = {
-    "language": "en",
-}
 
-
-class Crawler(AbstractAsyncContextManager):
-    def __init__(self) -> None:
+class ProgramCrawler(AbstractAsyncContextManager):
+    def __init__(self, program: ProgramDescription) -> None:
+        self._program = program
         self._session = ClientSession(BASE_URL)
-        self._session.cookie_jar.update_cookies(DEFAULT_SESSION_COOKIES)
+        self._session.cookie_jar.update_cookies({
+            "language": program.language
+        })
 
     async def __aenter__(self) -> Self:
         await self._session.__aenter__()
@@ -105,7 +104,8 @@ class Crawler(AbstractAsyncContextManager):
         traceback: TracebackType | None,
         /
     ) -> None:
-        await self._session.__aexit__( exc_type,
+        await self._session.__aexit__(
+            exc_type,
             exc_value,
             traceback
         )
@@ -138,14 +138,13 @@ class Crawler(AbstractAsyncContextManager):
     async def get_soup(
         self,
         url: URL,
-        **kwargs: Unpack[_RequestOptions],
     ) -> BeautifulSoup:
-        async with self.get(url, **kwargs) as (response, _):
+        async with self.get(url) as (response, _):
             raw_html = await response.text()
 
         return BeautifulSoup(raw_html, "lxml")
 
-    async def _get_curriculum_id(self, program: Program) -> str | None:
+    async def _get_curriculum_id(self) -> str | None:
         soup = await self.get_soup(BASE_URL / COURSE_CATALOG_PAGE)
 
         select_tag_selector = "form[action=\"coursecatalogue-get-currbranches-or-segments.action\"] > select"
@@ -164,7 +163,7 @@ class Crawler(AbstractAsyncContextManager):
                 page_url=BASE_URL / COURSE_CATALOG_PAGE
             )
 
-        program_code_string = " ".join(program.code)
+        program_code_string = " ".join(self._program.code)
         for option in options:
             if program_code_string in option.text:
                 value_attr = option.get("value")
@@ -316,7 +315,10 @@ class Crawler(AbstractAsyncContextManager):
 
                 course_class_ids_and_codes.append((course_class_id, course_class_code))
 
-            classes = await async_map_collect(self.crawl_class, course_class_ids_and_codes)
+            classes = await async_map_collect(
+                self.crawl_class,
+                course_class_ids_and_codes
+            )
 
         header_selector = "td h3"
         header = soup.select_one(header_selector)
@@ -346,7 +348,12 @@ class Crawler(AbstractAsyncContextManager):
             classes=classes
         )
 
-    async def crawl_course_class_group(self, *, curriculum_id: str, course_class_group_id: str) -> Course:
+    async def crawl_course_class_group(
+        self,
+        *,
+        curriculum_id: str,
+        course_class_group_id: str,
+    ) -> Course:
         url = (BASE_URL / COURSE_CLASS_GROUP_PAGE).extend_query({
             "curId": curriculum_id,
             "segId": 1,
@@ -378,10 +385,10 @@ class Crawler(AbstractAsyncContextManager):
             raise RuntimeError(f"Could not get course class ID from the given URL: \"{anchor_href}\".")
 
         return await self.crawl_course(
-            course_classes_id=course_classes_id
+            course_classes_id=course_classes_id,
         )
 
-    async def crawl_curriculum_by_id(self, curriculum_id: str) -> Courses:
+    async def courses_by_curriculum_id(self, curriculum_id: str) -> Courses:
         url = (BASE_URL / COURSES_FOR_CURRICULUM_PAGE).extend_query({
             "curId": curriculum_id,
             "set.listsubjects-overview.treeView.expandAll": "true",
@@ -422,14 +429,72 @@ class Crawler(AbstractAsyncContextManager):
             course_class_group_ids
         )
 
-        return Courses(courses)
+        return courses
 
-    async def retrieve_courses(self, program: Program) -> Courses:
-        curriculum_id = await self._get_curriculum_id(program)
+    async def crawl(self) -> Program:
+        curriculum_id = await self._get_curriculum_id()
         if curriculum_id is None:
             raise RuntimeError(
-                f"Could not retrieve a KUSSS curriculum ID for program with code: \"{program.code}\". Make sure that the the program code is correctly specified."
+                f"Could not retrieve a KUSSS curriculum ID for program with code: \"{self._program.code}\". Make sure that the the program code is correctly specified."
             )
 
-        return await self.crawl_curriculum_by_id(curriculum_id)
+        courses = await self.courses_by_curriculum_id(curriculum_id)
+        return Program(
+            name=self._program.name,
+            code=self._program.code,
+            courses=courses,
+        )
 
+
+class Crawler(AbstractAsyncContextManager):
+    def __init__(self) -> None:
+        self._session = ClientSession(BASE_URL)
+        self._log = logger.bind()
+
+    async def __aenter__(self) -> Self:
+        await self._session.__aenter__()
+
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /
+    ) -> None:
+        await self._session.__aexit__(
+            exc_type,
+            exc_value,
+            traceback
+        )
+
+    async def crawl_program(self, program: ProgramDescription) -> Program:
+        async with ProgramCrawler(program) as crawler:
+            return await crawler.crawl()
+
+    async def crawl_programs(self, descriptions: list[ProgramDescription]) -> list[Program]:
+        programs: list[Program] = []
+        for desc in descriptions:
+            log = self._log.bind(program_name=desc.name, program_code=desc.code)
+
+            start = time.perf_counter()
+            async with Crawler() as crawler:
+                end = time.perf_counter()
+                elapsed_secs = end - start
+
+                log.info("Successfully finished crawling.", took_secs=round(elapsed_secs, 3), crawled_count=len(descriptions))
+
+                program = await crawler.crawl_program(desc)
+                programs.append(program)
+
+        return programs
+
+    async def program_name_from_page(self, url: URL) -> None:
+        # TODO: Lookup additional courses with search if not found in the loaded
+        # curricula. This is need for the free electives and the special topics courses
+        # as those can't be found in the Studentenhandbuch. The logic could be
+        # implemetned on the Crawler, at this point the crawler could be renamed to
+        # something else, as it essentially serves as an API wrapper for KUSSS.
+
+        raise NotImplementedError("Not yet implemented.")

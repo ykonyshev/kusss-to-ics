@@ -1,24 +1,33 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Annotated, Final, cast
+from typing import Final, Literal, cast
 
-from pydantic import BaseModel, BeforeValidator, ValidationError
+from pydantic import BaseModel
+
+from kusss_to_ics.models.course import Courses
 
 PROGRAM_CODE_REGEX: Final = re.compile(r"(\d{3})(?:\s|\.|\/)?(\d{3})")
 
+def parse_program_code(string: str) -> ProgramCode | None:
+    match_ = next(PROGRAM_CODE_REGEX.finditer(string), None)
+    if match_ is None:
+        return None
+    else:
+        return cast(ProgramCode, match_.groups())
 
-def coerce_program_code(value: str) -> tuple[str, str]:
-    matched = PROGRAM_CODE_REGEX.match(value)
-    if matched is None:
-        raise ValidationError(f"\"{value}\" is an invalid value for a program code.")
 
-    first_triple, second_triple = cast(tuple[str, str], matched.groups())
-    return first_triple, second_triple
+type ProgramCode = tuple[str, str]
+type LanguageCode = Literal["en", "de"]
+
+class ProgramDescription(BaseModel):
+    name: str
+    code: ProgramCode
+    language: LanguageCode
 
 
 class Program(BaseModel):
     name: str
-    code: Annotated[tuple[str, str], BeforeValidator(coerce_program_code)]
-    curriculum_pdf: Path
+    code: ProgramCode
+
+    courses: Courses

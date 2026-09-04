@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import os
-from argparse import ArgumentError, ArgumentParser, Namespace
+from argparse import Action, ArgumentError, ArgumentParser, ArgumentTypeError, Namespace
 from pathlib import Path
 from typing import Final
 
+from attr import define
+
+from kusss_to_ics.models.program import ProgramCode, parse_program_code
+
 CONFIG_FILE_SUFFIX: Final = ".toml"
 CONFIG_FILE_REQUIREMENTS_DESC: Final = f"The provide path must be a path to an existing and readable *{CONFIG_FILE_SUFFIX} file."
+
+
+@define
+class Actions:
+    primary_program_code: Action
+
+
+def program_code_type(value: str) -> ProgramCode:
+    maybe_program_code = parse_program_code(value)
+    if maybe_program_code is None:
+        raise ArgumentTypeError("Invalid value provided, could not parse out the program code from the string.")
+
+    return maybe_program_code
 
 
 class Args(Namespace):
@@ -14,9 +31,12 @@ class Args(Namespace):
     semester: int
     export_path: Path
     split_by_course_type: bool
+    primary_program_code: ProgramCode | None
+    additional_courses: list[str]
+    ignore_cache: bool
 
     @classmethod
-    def parse(cls) -> Args:
+    def parse(cls) -> tuple[Args, Actions]:
         parser = ArgumentParser()
         config_file_action = parser.add_argument(
             "config_file",
@@ -30,13 +50,34 @@ class Args(Namespace):
             help="Export file, must be an `*.ics` file.",
         )
 
+        primary_program_action = parser.add_argument(
+            "--primary-program-code",
+            type=program_code_type,
+            help="The program code of the primary program if more than one program is defined in the configuration file.",
+            default=None
+        )
+
         parser.add_argument(
             "--semester",
             "-s",
             type=int,
-            help="The semester number (starting from 1) for which to consider the mandatory courses.",
+            help="The semester number (starting from 1) for which to consider the mandatory courses from the primary program given by ``.",
             required=True,
             dest="semester",
+        )
+
+        parser.add_argument(
+            "--ignore-cache",
+            action="store_true",
+            help="When passed the cache will be ignored."
+        )
+
+        parser.add_argument(
+            "--additional",
+            nargs="+",
+            help="Additional course to be included in the ICS export.",
+            dest="additional_courses",
+            default=[]
         )
 
         parser.add_argument(
@@ -54,4 +95,8 @@ class Args(Namespace):
         if args.split_by_course_type and not (not args.export_path.exists() or args.export_path.is_dir()):
             raise ArgumentError(export_path_action, "If the `--split-by-course-type` flag is provided, the export path must either be a path to non-existing file system object, or a path an existing directory.")
 
-        return args
+        actions = Actions(
+            primary_program_code=primary_program_action
+        )
+
+        return args, actions
