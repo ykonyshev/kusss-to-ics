@@ -25,7 +25,6 @@ class Appointment(BaseModel):
     room: str
 
 
-
 class Mode(Enum):
     ON_SITE = auto()
     REMOTE = auto()

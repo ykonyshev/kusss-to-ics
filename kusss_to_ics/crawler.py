@@ -164,8 +164,9 @@ class Crawler(AbstractAsyncContextManager):
                 page_url=BASE_URL / COURSE_CATALOG_PAGE
             )
 
+        program_code_string = " ".join(program.code)
         for option in options:
-            if program.code in option.text:
+            if program_code_string in option.text:
                 value_attr = option.get("value")
                 if value_attr is None:
                     raise MissingAttrError(

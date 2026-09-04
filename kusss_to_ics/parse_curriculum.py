@@ -78,7 +78,8 @@ def split_course_strings(col: Series) -> Series:
 
 
 # TODO: Make the code more generic where it also works with other curricula: TM,
-# CS.
+# CS. Or write separate parsers that are selected dynamically based on the
+# program code for a given curriculum PDF (provided on the title page).
 def parse_curriculum(pdf_path: Path) -> DataFrame:
     pages = list(extract_pages(pdf_path))
     page_count = len(pages)
@@ -143,8 +144,11 @@ class CourseDescription:
     type_: CourseType
 
 
-def curriculum_df_to_course_descriptions(df: DataFrame) -> list[CourseDescription]:
-    courses: list[CourseDescription] = []
+type CourseDescriptions = list[CourseDescription]
+
+
+def curriculum_df_to_course_descriptions(df: DataFrame) -> CourseDescriptions:
+    courses: CourseDescriptions = []
     for _, row in df.iterrows():
         course_type = COURSE_TYPES_REMAP.get(cast(str, row["course_type"]))
         if course_type is None:
