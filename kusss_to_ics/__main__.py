@@ -1,28 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-from ctypes import ArgumentError
-from itertools import chain
-from typing import Final
-
-from pydantic import RootModel
-
 from kusss_to_ics.args import Args
-from kusss_to_ics.export_ics import CourseExportDescription, export_ics
+from kusss_to_ics.models.course import Courses
 
 # Placed here above the other imports to improve startup time.
 ARGS, ACTIONS = Args.parse()
 
 import time
 from asyncio import Runner
+from collections.abc import Iterable
+from ctypes import ArgumentError
+from itertools import chain
 from pathlib import Path
+from typing import Final
 
 import structlog
 import uvloop
+from pydantic import RootModel
 from structlog import BoundLogger
+from yarl import URL
 
 from kusss_to_ics.config import Config
 from kusss_to_ics.crawler import Crawler
+from kusss_to_ics.export_ics import CourseExportDescription, export_ics
 from kusss_to_ics.models.program import Program, ProgramCode, ProgramDescription
 from kusss_to_ics.parse_curriculum import (
     CourseDescription,
@@ -38,13 +38,19 @@ CACHE_DIR: Final = Path(".cache")
 CACHE_DIR.mkdir(exist_ok=True, parents=True)
 
 CACHE_FILE: Final = CACHE_DIR / "kusss_crawl_cache.json"
+KUSSS_URL_HOST: Final = "www.kusss.jku.at"
 
 
+# TODO: Alternatively, support retrieving the courses from the same API that the
+# my.jku.at frontend uses.
 # TODO: Add a timestamp, recrawl if older than a day
+# TODO: A option to directly import the appointments into Google Calendar
 
 ProgramsList = RootModel[list[Program]]
 
 
+# TODO: Consider moving the caching logic into a separate class that invokes
+# the `Crawler`, would be easier to share the state that way.
 async def get_cached_or_crawl(
     *,
     descriptions: Iterable[ProgramDescription],
@@ -75,6 +81,9 @@ async def get_cached_or_crawl(
         log.debug("Starting to cr")
         programs.extend(await crawler.crawl_programs(to_crawl))
 
+        # FIXME: The timezone information is not properly serialized and
+        # deserialized. The appointments restored from cache are treated as
+        # UTC.
         serialized = ProgramsList(programs).model_dump_json()
         with CACHE_FILE.open("w") as handle:
             log.debug("Cached the result of the crawl into the cache file.")
@@ -90,7 +99,7 @@ async def async_main() -> None:
     if len(config.programs) > 1 and ARGS.primary_program_code is None:
         raise ArgumentError(
             ACTIONS.primary_program_code,
-            f"More than one program is configured in the config file, but no primary program is selected, please provide a value for the `{ACTIONS.primary_program_code.option_strings[0]}` option with the a the program code of a configured program."
+            f"More than one program is configured in the config file, but no primary program is selected, please provide a value for the `{ACTIONS.primary_program_code.option_strings[0]}` option with the program code of a configured program."
         )
 
     start = time.perf_counter()
@@ -114,7 +123,7 @@ async def async_main() -> None:
         if ARGS.primary_program_code is not None and ARGS.primary_program_code != primary_program_code:
             raise ArgumentError(
                 ACTIONS.primary_program_code,
-                "Only a single program is configured, the primary program_code provided missmatches the program code. More generally, there is no need to provide the pimary program code if there is a single program configured."
+                "Only a single program is configured, the primary program_code provided mismatches the program code. More generally, there is no need to provide the primary program code if there is a single program configured."
             )
 
     if primary_program_code not in program_descriptions:
@@ -127,16 +136,37 @@ async def async_main() -> None:
     to_export_courses = courses_df_to_course_export_descriptions(primary_courses_df)
 
     async with Crawler() as crawler:
-        print(ARGS.additional_courses)
-        for additional_course_name in ARGS.additional_courses:
-            to_export_courses.append(
-                CourseExportDescription(
-                    description=CourseDescription(
-                        name=additional_course_name.strip().strip()
-                    ),
-                    extraculicular=True,
+        extra_kusss_courses: Courses = []
+        for additional_course_name_or_url in ARGS.additional_courses:
+            try:
+                url = URL(additional_course_name_or_url)
+                if url.host != KUSSS_URL_HOST:
+                    raise ValueError
+                try:
+                    # TODO: Cache these requests as well.
+                    kusss_course = await crawler.crawl_course_by_url(
+                        url=url,
+                        primary_program_desc=program_descriptions[primary_program_code]
+                    )
+                except ValueError:
+                    error_message = "Invalid course URL provided for the additional courses."
+                    log.error(
+                        error_message,
+                        additional_course_url=url.human_repr()
+                    )
+                    raise RuntimeError(f"{error_message} URL: \"{url.human_repr()}\"")
+
+                extra_kusss_courses.append(kusss_course)
+
+            except ValueError:
+                to_export_courses.append(
+                    CourseExportDescription(
+                        description=CourseDescription(
+                            name=additional_course_name_or_url.strip()
+                        ),
+                        extraculicular=True,
+                    )
                 )
-            )
 
         kusss_programs = await get_cached_or_crawl(
             descriptions=program_descriptions.values(),
@@ -148,6 +178,7 @@ async def async_main() -> None:
     export_ics(
         to_export_courses=to_export_courses,
         kusss_courses=kusss_courses,
+        extra_kusss_courses=extra_kusss_courses,
         export_path=ARGS.export_path,
         split_by_course_type=ARGS.split_by_course_type
     )

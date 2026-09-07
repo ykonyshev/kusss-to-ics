@@ -58,14 +58,53 @@ class CourseExportDescription:
     extraculicular: bool = False
 
 
+@define
+class ExportEntry:
+    course: Course
+    extraculicular: bool
+
+    def add_to_calendar(
+        self,
+        calendar: Calendar,
+    ) -> None:
+        for class_ in self.course.classes:
+            instructors_string = ", ".join(instructor.name for instructor in class_.instructors)
+            event_name = f"{self.course.type_}: {self.course.name}\n{instructors_string}"
+
+            description_items: list[str] = []
+            if class_.additional_info is not None:
+                description_items.append(class_.additional_info)
+
+            url_repr = class_.kusss_page.human_repr()
+            description_items.extend([
+                url_repr,
+            ])
+
+            for appointment in class_.appointments:
+                start_time, end_time = appointment.time_range
+                appointment_event = Event(
+                    name=event_name,
+                    begin=datetime.datetime.combine(appointment.date, start_time),
+                    end=datetime.datetime.combine(appointment.date, end_time),
+                    url=url_repr,
+                    location=appointment.room,
+                    description="\n\n".join(description_items),  # pyright: ignore[reportArgumentType]
+                )
+
+                calendar.events.add(appointment_event)
+
+
 def export_ics(
     *,
     kusss_courses: Iterable[Course],
-    to_export_courses: list[CourseExportDescription],
+    to_export_courses: Iterable[CourseExportDescription],
+    extra_kusss_courses: Iterable[Course],
     export_path: Path,
     split_by_course_type: bool = False,
 ) -> None:
     kusss_courses = list(kusss_courses)
+    to_export_courses = list(to_export_courses)
+    extra_kusss_courses = list(extra_kusss_courses)
 
     log = logger.bind()
     type_and_name_to_kusss_course: dict[CourseKey, list[Course]] = {
@@ -77,7 +116,10 @@ def export_ics(
         words = course.name.split(" ")
         assert words, "There must at least one word in the course name, unless the course name is empty."
 
-        alt_names = generate_contractions(course.name, min_length=len(words[0]) + 5) + [course.name]
+        alt_names = generate_contractions(
+            compound=course.name,
+            min_length=len(words[0]) + 5
+        ) + [course.name]
         for name in alt_names:
             key = (pd.NA, name)
             courses_with_name = type_and_name_to_kusss_course.get(key, None)
@@ -87,7 +129,7 @@ def export_ics(
 
             courses_with_name.append(course)
 
-    calendars = defaultdict[CourseType | str, Calendar](lambda: Calendar())
+    to_export: list[ExportEntry] = []
 
     for sem_course in to_export_courses:
         key = (sem_course.description.type_, sem_course.description.name)
@@ -98,39 +140,32 @@ def export_ics(
             raise RuntimeError("No corresponding KUSSS course found.")
 
         for kusss_course in matching:
-            for class_ in kusss_course.classes:
-                instructors_string = ", ".join(instructor.name for instructor in class_.instructors)
-                event_name = f"{kusss_course.type_}: {kusss_course.name}\n{instructors_string}"
+            to_export.append(
+                ExportEntry(
+                    course=kusss_course,
+                    extraculicular=sem_course.extraculicular
+                )
+            )
 
-                description_items: list[str] = []
-                if class_.additional_info is not None:
-                    description_items.append(class_.additional_info)
+    for course in extra_kusss_courses:
+        to_export.append(
+            ExportEntry(
+                course=course,
+                extraculicular=True,
+            )
+        )
 
-                url_repr = class_.kusss_page.human_repr()
-                description_items.extend([
-                    url_repr,
-                ])
+    calendars = defaultdict[CourseType | str, Calendar](lambda: Calendar())
+    for export_entry in to_export:
+        if split_by_course_type:
+            if export_entry.extraculicular:
+                calendar = calendars[EXTRA_COURSES_CALENDAR_KEY]
+            else:
+                calendar = calendars[export_entry.course.type_]
+        else:
+            calendar = calendars[COMBINED_CALENDAR_KEY]
 
-                for appointment in class_.appointments:
-                    start_time, end_time = appointment.time_range
-                    appointment_event = Event(
-                        name=event_name,
-                        begin=datetime.datetime.combine(appointment.date, start_time),
-                        end=datetime.datetime.combine(appointment.date, end_time),
-                        url=url_repr,
-                        location=appointment.room,
-                        description="\n\n".join(description_items),  # pyright: ignore[reportArgumentType]
-                    )
-
-                    if split_by_course_type:
-                        if sem_course.extraculicular:
-                            calendar = calendars[EXTRA_COURSES_CALENDAR_KEY]
-                        else:
-                            calendar = calendars[kusss_course.type_]
-                    else:
-                        calendar = calendars[COMBINED_CALENDAR_KEY]
-
-                    calendar.events.add(appointment_event)
+        export_entry.add_to_calendar(calendar)
 
     if split_by_course_type:
         if not (not export_path.exists() or export_path.is_dir()):
