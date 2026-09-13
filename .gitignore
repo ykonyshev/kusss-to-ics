@@ -1,7 +1,8 @@
 __pycache__/
 /.venv/
 
-/config/
+/config/*
+!/config/example.toml
 /pdfs/
 /.cache/
 /exports/

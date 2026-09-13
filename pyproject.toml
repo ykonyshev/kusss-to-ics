@@ -1,7 +1,7 @@
 [project]
 name = "kusss-to-ics"
 version = "0.1.0"
-description = "Scrapes appointments from KUSSS into an .ics file."
+description = "Scrapes appointments from KUSSS into ICS files."
 authors = [
     {name = "Yevhenii Konyshev", email = "yevhenii.konyshev@gmail.com"}
 ]
